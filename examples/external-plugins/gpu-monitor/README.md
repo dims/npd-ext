@@ -29,7 +29,7 @@ go build -o gpu-monitor ./examples/external-plugins/gpu-monitor/
 
 ```bash
 # Build GPU monitor image
-docker build -t npd-gpu-monitor:latest -f examples/external-plugins/gpu-monitor/Dockerfile .
+docker build -t npd-gpu-monitor:v0.1.0 -f examples/external-plugins/gpu-monitor/Dockerfile .
 ```
 
 ## Configuration
@@ -88,7 +88,7 @@ mkdir -p /var/run/npd
 docker run --rm \
   --gpus all \
   -v /var/run/npd:/var/run/npd \
-  npd-gpu-monitor:latest \
+  npd-gpu-monitor:v0.1.0 \
   --socket=/var/run/npd/gpu-monitor.sock \
   --temp-threshold=80 \
   --memory-threshold=90.0
@@ -114,7 +114,7 @@ spec:
       hostPID: true
       containers:
       - name: gpu-monitor
-        image: npd-gpu-monitor:latest
+        image: npd-gpu-monitor:v0.1.0
         args:
         - --socket=/var/run/npd/gpu-monitor.sock
         - --temp-threshold=85

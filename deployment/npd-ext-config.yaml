@@ -1,0 +1,216 @@
+# ConfigMap for NPD Extension monitoring configurations
+# Copyright 2024 The Kubernetes Authors All rights reserved.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: npd-ext-config
+  namespace: kube-system
+  labels:
+    app: npd-ext
+    component: node-problem-detector
+data:
+  # External GPU monitor configuration
+  external-gpu-monitor.json: |
+    {
+      "plugin": "external",
+      "pluginConfig": {
+        "socketAddress": "/var/run/npd/npd-gpu-monitor.sock",
+        "grpcTimeout": "10s",
+        "reconnectInterval": "30s",
+        "maxReconnectAttempts": 5
+      },
+      "source": "gpu-monitor",
+      "conditions": [
+        {
+          "type": "GPUHung",
+          "reason": "GPUHung",
+          "message": "GPU is hung and not responding"
+        },
+        {
+          "type": "GPUMemoryPressure",
+          "reason": "GPUMemoryPressure",
+          "message": "GPU memory usage is too high"
+        },
+        {
+          "type": "GPUTemperatureHigh",
+          "reason": "GPUTemperatureHigh",
+          "message": "GPU temperature is too high"
+        }
+      ],
+      "rules": [
+        {
+          "type": "temporary",
+          "reason": "GPUMemoryPressure",
+          "pattern": "GPU memory usage: ([0-9]+)% \\(threshold: ([0-9]+)%\\)"
+        },
+        {
+          "type": "temporary",
+          "reason": "GPUTemperatureHigh",
+          "pattern": "GPU temperature: ([0-9]+)°C \\(threshold: ([0-9]+)°C\\)"
+        },
+        {
+          "type": "permanent",
+          "condition": "GPUHung",
+          "reason": "GPUHung",
+          "pattern": "GPU is not responding"
+        }
+      ]
+    }
+
+  # Minimal kernel monitor for core functionality
+  kernel-monitor.json: |
+    {
+      "plugin": "kmsg",
+      "pluginConfig": {
+        "source": "kernel-monitor",
+        "metricsReporting": "true",
+        "kernelLogPath": "/dev/kmsg"
+      },
+      "logPath": "/dev/kmsg",
+      "lookback": "5m",
+      "bufferSize": 10,
+      "source": "kernel-monitor",
+      "conditions": [
+        {
+          "type": "KernelDeadlock",
+          "reason": "KernelHasNoDeadlock",
+          "message": "kernel has no deadlock"
+        },
+        {
+          "type": "ReadonlyFilesystem",
+          "reason": "FilesystemIsNotReadOnly",
+          "message": "Filesystem is not read-only"
+        }
+      ],
+      "rules": [
+        {
+          "type": "temporary",
+          "reason": "OOMKilling",
+          "pattern": "Out of memory: Kill process \\d+ (.+) score \\d+ or sacrifice child\\nKilled process \\d+ \\((.+)\\) total-vm:\\d+kB, anon-rss:\\d+kB, file-rss:\\d+kB.*"
+        },
+        {
+          "type": "permanent",
+          "condition": "KernelDeadlock",
+          "reason": "AUFSUmountHung",
+          "pattern": "task umount\\.aufs:.* blocked for more than \\w+ seconds\\."
+        },
+        {
+          "type": "permanent",
+          "condition": "ReadonlyFilesystem",
+          "reason": "FilesystemReadOnly",
+          "pattern": "Remounting filesystem read-only"
+        }
+      ]
+    }
+
+  # Read-only filesystem monitor
+  readonly-monitor.json: |
+    {
+      "plugin": "kmsg",
+      "pluginConfig": {
+        "source": "readonly-monitor",
+        "metricsReporting": "true"
+      },
+      "logPath": "/dev/kmsg",
+      "lookback": "5m",
+      "bufferSize": 10,
+      "source": "readonly-monitor",
+      "conditions": [
+        {
+          "type": "ReadonlyFilesystem",
+          "reason": "FilesystemIsNotReadOnly",
+          "message": "Filesystem is not read-only"
+        }
+      ],
+      "rules": [
+        {
+          "type": "permanent",
+          "condition": "ReadonlyFilesystem",
+          "reason": "FilesystemReadOnly",
+          "pattern": "Remounting filesystem read-only"
+        }
+      ]
+    }
+
+  # Docker/containerd monitor
+  docker-monitor.json: |
+    {
+      "plugin": "journald",
+      "pluginConfig": {
+        "source": "dockerd"
+      },
+      "logPath": "/var/log/journal",
+      "lookback": "5m",
+      "bufferSize": 10,
+      "source": "docker-monitor",
+      "conditions": [
+        {
+          "type": "CorruptDockerImage",
+          "reason": "CorruptDockerImage",
+          "message": "Docker has corrupt image"
+        }
+      ],
+      "rules": [
+        {
+          "type": "permanent",
+          "condition": "CorruptDockerImage",
+          "reason": "CorruptDockerImage",
+          "pattern": "Error trying v2 registry: failed to register layer: rename /var/lib/docker/image/(.+) /var/lib/docker/image/(.+): directory not empty.*"
+        }
+      ]
+    }
+
+  # System stats monitor
+  system-stats-monitor.json: |
+    {
+      "plugin": "systemStats",
+      "pluginConfig": {
+        "metricsReporting": "true",
+        "source": "system-stats-monitor",
+        "invokeInterval": "60s"
+      },
+      "source": "system-stats-monitor"
+    }
+
+  # Network problem monitor (custom plugin)
+  network-problem-monitor.json: |
+    {
+      "plugin": "custom",
+      "pluginConfig": {
+        "invoke_interval": "30s",
+        "timeout": "5s",
+        "max_output_length": 80,
+        "concurrency": 3,
+        "skip_initial_status": false,
+        "enable_message_change_based_condition_update": false
+      },
+      "source": "network-problem-monitor",
+      "conditions": [
+        {
+          "type": "ConntrackFull",
+          "reason": "ConntrackIsNotFull",
+          "message": "Conntrack is not full"
+        },
+        {
+          "type": "DNSUnreachable",
+          "reason": "DNSReachable",
+          "message": "DNS is reachable"
+        }
+      ],
+      "rules": [
+        {
+          "type": "temporary",
+          "reason": "ConntrackFull",
+          "path": "/var/log/messages",
+          "pattern": "nf_conntrack: table full, dropping packet"
+        },
+        {
+          "type": "permanent",
+          "condition": "DNSUnreachable",
+          "reason": "DNSUnreachable",
+          "path": "/var/log/messages",
+          "pattern": "DNS resolution failed"
+        }
+      ]
+    }

@@ -1,0 +1,48 @@
+# Specialized Dockerfile for GPU Monitor standalone deployment
+# Copyright 2024 The Kubernetes Authors All rights reserved.
+
+# Stage 1: Builder
+FROM golang:1.25.3-alpine AS builder
+
+# Set working directory
+WORKDIR /gopath/src/k8s.io/npd-ext
+
+# Copy source code
+COPY . .
+
+# Build GPU monitor binary (static compilation)
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+RUN go mod download && go mod tidy
+RUN go build -ldflags "-w -s" -o bin/gpu-monitor ./examples/external-plugins/gpu-monitor
+
+# Stage 2: Runtime with NVIDIA support
+FROM nvcr.io/nvidia/cuda:12.0.0-base-ubuntu22.04
+
+# Install basic utilities (nvidia-smi already included in CUDA base image)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r npd && useradd -r -g npd npd
+
+# Copy binary from builder
+COPY --from=builder /gopath/src/k8s.io/npd-ext/bin/gpu-monitor /gpu-monitor
+
+# Set permissions
+RUN chmod +x /gpu-monitor
+
+# Create socket directory
+RUN mkdir -p /var/run/npd && chown npd:npd /var/run/npd
+
+# Switch to non-root user
+USER npd
+
+# Expose socket directory
+VOLUME ["/var/run/npd"]
+
+# Run GPU monitor
+ENTRYPOINT ["/gpu-monitor"]
+CMD ["--socket", "/var/run/npd/npd-gpu-monitor.sock", "--temp-threshold=85", "--memory-threshold=95.0"]

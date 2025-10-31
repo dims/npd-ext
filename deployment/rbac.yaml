@@ -1,0 +1,28 @@
+# RBAC configuration for NPD Extension Module
+# Copyright 2024 The Kubernetes Authors All rights reserved.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: npd-ext
+  namespace: kube-system
+  labels:
+    app: npd-ext
+    component: node-problem-detector
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: npd-ext
+  labels:
+    app: npd-ext
+    component: node-problem-detector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:node-problem-detector
+subjects:
+- kind: ServiceAccount
+  name: npd-ext
+  namespace: kube-system

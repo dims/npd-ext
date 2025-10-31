@@ -1,0 +1,169 @@
+# Alternative deployment: Separate DaemonSets for NPD and GPU monitor
+# Copyright 2024 The Kubernetes Authors All rights reserved.
+
+# NPD Extension DaemonSet (without GPU monitor)
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: npd-ext-core
+  namespace: kube-system
+  labels:
+    app: npd-ext-core
+    component: node-problem-detector
+spec:
+  selector:
+    matchLabels:
+      app: npd-ext-core
+      component: node-problem-detector
+  template:
+    metadata:
+      labels:
+        app: npd-ext-core
+        component: node-problem-detector
+    spec:
+      serviceAccountName: npd-ext
+      hostNetwork: true
+      hostPID: true
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      - operator: Exists
+        effect: NoExecute
+      nodeSelector:
+        kubernetes.io/os: linux
+      containers:
+      - name: node-problem-detector
+        image: ghcr.io/dims/npd-ext/node-problem-detector:v0.1.0
+        imagePullPolicy: Always
+        command:
+        - /node-problem-detector
+        - --logtostderr
+        - --config.system-log-monitor=/config/kernel-monitor.json,/config/readonly-monitor.json,/config/docker-monitor.json
+        - --config.external-monitor=/config/external-gpu-monitor.json
+        - --config.system-stats-monitor=/config/system-stats-monitor.json
+        - --config.custom-plugin-monitor=/config/network-problem-monitor.json
+        securityContext:
+          privileged: true
+        resources:
+          limits:
+            cpu: 10m
+            memory: 80Mi
+          requests:
+            cpu: 10m
+            memory: 80Mi
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: log
+          mountPath: /var/log
+          readOnly: true
+        - name: kmsg
+          mountPath: /dev/kmsg
+          readOnly: true
+        - name: localtime
+          mountPath: /etc/localtime
+          readOnly: true
+        - name: config
+          mountPath: /config
+          readOnly: true
+        - name: npd-socket
+          mountPath: /var/run/npd
+
+      volumes:
+      - name: log
+        hostPath:
+          path: /var/log/
+      - name: kmsg
+        hostPath:
+          path: /dev/kmsg
+      - name: localtime
+        hostPath:
+          path: /etc/localtime
+      - name: config
+        configMap:
+          name: npd-ext-config
+      - name: npd-socket
+        hostPath:
+          path: /var/run/npd
+
+---
+# GPU Monitor DaemonSet (separate deployment)
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: npd-ext-gpu-monitor
+  namespace: kube-system
+  labels:
+    app: npd-ext-gpu-monitor
+    component: gpu-monitor
+spec:
+  selector:
+    matchLabels:
+      app: npd-ext-gpu-monitor
+      component: gpu-monitor
+  template:
+    metadata:
+      labels:
+        app: npd-ext-gpu-monitor
+        component: gpu-monitor
+    spec:
+      serviceAccountName: npd-ext
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      - operator: Exists
+        effect: NoExecute
+      nodeSelector:
+        kubernetes.io/os: linux
+        # Only deploy to GPU nodes
+        accelerator: nvidia
+      containers:
+      - name: gpu-monitor
+        image: nvcr.io/nvidia/cuda:12.0.0-base-ubuntu22.04
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          # Install GPU monitor binary from ConfigMap
+          cp /config/gpu-monitor /usr/local/bin/gpu-monitor
+          chmod +x /usr/local/bin/gpu-monitor
+          # Run GPU monitor
+          /usr/local/bin/gpu-monitor \
+            --socket=/var/run/npd/npd-gpu-monitor.sock \
+            --temp-threshold=85 \
+            --memory-threshold=95.0 \
+            --interval=30s
+        securityContext:
+          privileged: true  # Required for GPU device access
+        resources:
+          limits:
+            cpu: 50m
+            memory: 50Mi
+            nvidia.com/gpu: 1
+          requests:
+            cpu: 10m
+            memory: 20Mi
+            nvidia.com/gpu: 1
+        volumeMounts:
+        - name: npd-socket
+          mountPath: /var/run/npd
+        - name: config
+          mountPath: /config
+          readOnly: true
+        env:
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "all"
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: "utility"
+
+      volumes:
+      - name: npd-socket
+        hostPath:
+          path: /var/run/npd
+      - name: config
+        configMap:
+          name: npd-ext-config
+          defaultMode: 0755

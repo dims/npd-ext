@@ -1,0 +1,154 @@
+# DaemonSet for NPD Extension with integrated GPU monitoring
+# Copyright 2024 The Kubernetes Authors All rights reserved.
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: npd-ext
+  namespace: kube-system
+  labels:
+    app: npd-ext
+    component: node-problem-detector
+spec:
+  selector:
+    matchLabels:
+      app: npd-ext
+      component: node-problem-detector
+  template:
+    metadata:
+      labels:
+        app: npd-ext
+        component: node-problem-detector
+    spec:
+      serviceAccountName: npd-ext
+      hostNetwork: true
+      hostPID: true
+      tolerations:
+      # Allow scheduling on all nodes
+      - operator: Exists
+        effect: NoSchedule
+      - operator: Exists
+        effect: NoExecute
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/os
+                operator: In
+                values:
+                - linux
+            # Prefer GPU nodes but allow scheduling on any Linux node
+            - matchExpressions:
+              - key: kubernetes.io/os
+                operator: In
+                values:
+                - linux
+              - key: accelerator
+                operator: In
+                values:
+                - nvidia-tesla-k80
+                - nvidia-tesla-p4
+                - nvidia-tesla-v100
+                - nvidia-tesla-p100
+                - nvidia-tesla-t4
+                - nvidia-tesla-a100
+                - nvidia-l40s
+      nodeSelector:
+        kubernetes.io/os: linux
+      containers:
+      # Main NPD container with external monitor support
+      - name: node-problem-detector
+        image: ghcr.io/dims/npd-ext/node-problem-detector:v0.1.0
+        imagePullPolicy: Always
+        command:
+        - /node-problem-detector
+        - --logtostderr
+        - --config.system-log-monitor=/config/kernel-monitor.json,/config/readonly-monitor.json
+        - --config.external-monitor=/config/external-gpu-monitor.json
+        - --config.system-stats-monitor=/config/system-stats-monitor.json
+        securityContext:
+          privileged: true
+        resources:
+          limits:
+            cpu: 10m
+            memory: 80Mi
+          requests:
+            cpu: 10m
+            memory: 80Mi
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: log
+          mountPath: /var/log
+          readOnly: true
+        - name: kmsg
+          mountPath: /dev/kmsg
+          readOnly: true
+        - name: localtime
+          mountPath: /etc/localtime
+          readOnly: true
+        - name: config
+          mountPath: /config
+          readOnly: true
+        - name: npd-socket
+          mountPath: /var/run/npd
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 20256
+            host: 127.0.0.1
+          initialDelaySeconds: 60
+          periodSeconds: 60
+          timeoutSeconds: 3
+
+      # GPU monitor sidecar container
+      - name: gpu-monitor
+        image: ghcr.io/dims/npd-ext/gpu-monitor:v0.1.0
+        imagePullPolicy: IfNotPresent
+        args:
+        - --socket=/var/run/npd/npd-gpu-monitor.sock
+        - --temp-threshold=85
+        - --memory-threshold=95
+        securityContext:
+          privileged: true  # Required for GPU device access
+        resources:
+          limits:
+            cpu: 50m
+            memory: 50Mi
+            nvidia.com/gpu: 1
+          requests:
+            cpu: 10m
+            memory: 20Mi
+            nvidia.com/gpu: 1
+        volumeMounts:
+        - name: npd-socket
+          mountPath: /var/run/npd
+        - name: config
+          mountPath: /config
+          readOnly: true
+        env:
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "all"
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: "utility"
+
+      volumes:
+      - name: log
+        hostPath:
+          path: /var/log/
+      - name: kmsg
+        hostPath:
+          path: /dev/kmsg
+      - name: localtime
+        hostPath:
+          path: /etc/localtime
+      - name: config
+        configMap:
+          name: npd-ext-config
+          defaultMode: 0755  # Make gpu-monitor binary executable
+      - name: npd-socket
+        emptyDir: {}

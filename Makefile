@@ -3,9 +3,19 @@
 
 # Module information
 MODULE := k8s.io/npd-ext
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION ?= v0.1.0
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Docker settings
+REGISTRY ?= ghcr.io/dims/npd-ext
+NPD_IMAGE := $(REGISTRY)/node-problem-detector
+GPU_MONITOR_IMAGE := $(REGISTRY)/gpu-monitor
+DOCKER_PLATFORMS := linux/amd64,linux/arm64
+
+# Note: Our Kubernetes manifests now use nvcr.io/nvidia/cuda:12.0.0-base-ubuntu22.04 directly
+# for GPU monitoring, which eliminates the need for apt-install and provides reliable nvidia-smi.
+# The GPU_MONITOR_IMAGE is still built for standalone deployments or custom configurations.
 
 # Go build settings
 GO := go
@@ -25,7 +35,7 @@ GPU_MONITOR_PKG := ./examples/external-plugins/gpu-monitor
 NPD_PKG := ./cmd/nodeproblemdetector
 API_DIR := ./api/services/external/v1
 
-.PHONY: all build clean test lint fmt vet protobuf help deps npd-with-external
+.PHONY: all build clean test lint fmt vet protobuf help deps docker-build docker-build-gpu docker-push docker-push-gpu docker-build-all docker-push-all
 
 # Default target
 all: build
@@ -104,10 +114,58 @@ build-all: deps
 	GOOS=darwin GOARCH=amd64 $(GO) build $(BUILD_FLAGS) $(LDFLAGS) -o $(BINDIR)/$(GPU_MONITOR_BINARY)-darwin-amd64 $(GPU_MONITOR_PKG)
 	GOOS=darwin GOARCH=arm64 $(GO) build $(BUILD_FLAGS) $(LDFLAGS) -o $(BINDIR)/$(GPU_MONITOR_BINARY)-darwin-arm64 $(GPU_MONITOR_PKG)
 
-## Build Docker image
-docker-build:
-	@echo "Building Docker image..."
-	docker build -t $(MODULE):$(VERSION) -f examples/external-plugins/gpu-monitor/Dockerfile .
+## Build NPD Docker image with external monitor support
+docker-build: build-all-binaries
+	@echo "Building NPD Docker image with external monitor support..."
+	docker build -t $(NPD_IMAGE):$(VERSION) .
+
+## Build GPU monitor Docker image
+docker-build-gpu: $(BINDIR)/$(GPU_MONITOR_BINARY)
+	@echo "Building GPU monitor Docker image..."
+	@echo "Note: Uses nvcr.io/nvidia/cuda:12.0.0-base-ubuntu22.04 base image with pre-installed nvidia-smi"
+	docker build -t $(GPU_MONITOR_IMAGE):$(VERSION) -f Dockerfile.gpu-monitor .
+
+## Build all Docker images
+docker-build-all: docker-build docker-build-gpu
+
+## Build NPD image for multiple platforms
+docker-buildx:
+	@echo "Building NPD image for multiple platforms..."
+	docker buildx build --platform $(DOCKER_PLATFORMS) -t $(NPD_IMAGE):$(VERSION) .
+
+## Build GPU monitor image for multiple platforms
+docker-buildx-gpu:
+	@echo "Building GPU monitor image for multiple platforms..."
+	docker buildx build --platform $(DOCKER_PLATFORMS) -t $(GPU_MONITOR_IMAGE):$(VERSION) -f Dockerfile.gpu-monitor .
+
+## Build all images for multiple platforms
+docker-buildx-all: docker-buildx docker-buildx-gpu
+
+## Push NPD Docker image
+docker-push: docker-build
+	@echo "Pushing NPD Docker image..."
+	docker push $(NPD_IMAGE):$(VERSION)
+
+## Push GPU monitor Docker image
+docker-push-gpu: docker-build-gpu
+	@echo "Pushing GPU monitor Docker image..."
+	docker push $(GPU_MONITOR_IMAGE):$(VERSION)
+
+## Push all Docker images
+docker-push-all: docker-push docker-push-gpu
+
+## Push images for multiple platforms
+docker-push-buildx: docker-buildx
+	@echo "Pushing NPD image for multiple platforms..."
+	docker buildx build --platform $(DOCKER_PLATFORMS) --push -t $(NPD_IMAGE):$(VERSION) .
+
+## Push GPU monitor for multiple platforms
+docker-push-buildx-gpu: docker-buildx-gpu
+	@echo "Pushing GPU monitor image for multiple platforms..."
+	docker buildx build --platform $(DOCKER_PLATFORMS) --push -t $(GPU_MONITOR_IMAGE):$(VERSION) -f Dockerfile.gpu-monitor .
+
+## Push all images for multiple platforms
+docker-push-buildx-all: docker-push-buildx docker-push-buildx-gpu
 
 ## Show module information
 info:

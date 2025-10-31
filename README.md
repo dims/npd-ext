@@ -34,7 +34,7 @@ This repository demonstrates how to extend Node Problem Detector with **external
 ## Architecture Overview
 
 ```
-┌─────────────────┐    Unix Socket    ┌─────────────────┐
+┌─────────────────┐    Unix Socket     ┌─────────────────┐
 │                 │ ◄────────────────► │                 │
 │  Node Problem   │                    │  External GPU   │
 │   Detector      │  gRPC Protocol     │    Monitor      │
@@ -428,46 +428,6 @@ impl ExternalMonitor for MyMonitor {
     }
 }
 ```
-
-## Production Considerations
-
-### Security
-
-- External monitors run with minimal privileges
-- Unix socket communication is isolated to the node
-- Monitor containers should be non-root where possible
-- Validate all external monitor configurations
-
-### Reliability
-
-- External monitors should implement health checking
-- Use exponential backoff for connection failures
-- Consider circuit breaker patterns for unstable monitors
-- Monitor the monitors with metrics and alerting
-
-### Scalability
-
-- External monitors add minimal overhead to NPD core
-- Socket communication is very low latency
-- Consider resource limits for external monitors
-- Monitor count is limited by node resources, not NPD
-
-## Performance vs Original NPD
-
-### Binary Sizes
-- **Original NPD**: ~48MB
-- **NPD-ext**: ~48MB (no increase)
-- **GPU Monitor**: ~10MB (additional external plugin)
-
-### Module Efficiency
-- **Original NPD**: 139 source files
-- **NPD-ext**: 9 source files (93% reduction through vendoring)
-- **Memory overhead**: <5MB for external plugin architecture
-
-### Runtime Performance
-- **Startup time**: +<100ms for external plugin initialization
-- **CPU overhead**: <1% for gRPC communication
-- **Memory overhead**: <10MB per external plugin
 
 ## Contributing
 
